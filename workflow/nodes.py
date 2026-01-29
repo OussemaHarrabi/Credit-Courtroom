@@ -1,5 +1,5 @@
 from typing import Dict, Any
-from langgraph.types import Command
+from langgraph.types import Command # type: ignore
 from langgraph.graph import END
 
 from workflow.debate_state import DebateState
@@ -12,7 +12,6 @@ from workflow.prompts import (
     JUDGE_SYSTEM, JUDGE_HUMAN
 )
 
-# Node names (must match debate_workflow.py)
 NODE_RISK = "risk_agent"
 NODE_ADV = "advocate_agent"
 NODE_MOD = "moderator"
@@ -87,23 +86,16 @@ class AdvocateAgentNode:
 
 
 class ModeratorNode:
-    """
-    Deterministic routing (like Deb8flow's DebateModeratorNode),
-    BUT implemented correctly for LangGraph using Command(goto=...).
-    """
     def __init__(self):
-        # You can keep this chain for “style” / narration later, but we do NOT rely on LLM for routing.
         self.chain = build_chain(MOD_SYSTEM, MOD_HUMAN, temperature=0.0)
 
     def __call__(self, state: DebateState) -> Command[str]:
         stage = state.get("stage", "opening")
         speaker = state.get("speaker", "risk")
 
-        # ✅ If we already reached verdict/judge, end safely.
         if stage == "verdict" or speaker == "judge":
             return Command(goto=NODE_JUDGE if speaker == "judge" else END)
 
-        # Deterministic schedule
         if stage == "opening" and speaker == "risk":
             return Command(update={"stage": "rebuttal", "speaker": "advocate"}, goto=NODE_ADV)
 
@@ -116,7 +108,6 @@ class ModeratorNode:
         if stage == "final_argument" and speaker == "advocate":
             return Command(update={"stage": "verdict", "speaker": "judge"}, goto=NODE_JUDGE)
 
-        # Fallback: if state got weird, go to judge instead of crashing
         return Command(update={"stage": "verdict", "speaker": "judge"}, goto=NODE_JUDGE)
 
 

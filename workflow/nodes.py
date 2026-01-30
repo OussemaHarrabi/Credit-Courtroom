@@ -11,6 +11,8 @@ from workflow.prompts import (
     MOD_SYSTEM, MOD_HUMAN,
     JUDGE_SYSTEM, JUDGE_HUMAN
 )
+from apps.retrieval.policies import retrieve_policies
+
 
 NODE_RISK = "risk_agent"
 NODE_ADV = "advocate_agent"
@@ -22,23 +24,26 @@ def _fmt_neighbors(neighbors):
     neighbors = neighbors or []
     lines = []
     for i, n in enumerate(neighbors[:10], 1):
-        score = n.get("score")
+        sim = n.get("similarity")  # ✅ renamed from score
         try:
-            score_s = f"{float(score):.3f}"
+            sim_s = f"{float(sim):.3f}"
         except Exception:
-            score_s = "n/a"
+            sim_s = "n/a"
 
         summ = (n.get("summary") or "")[:140]
+        # ✅ explicitly disambiguate similarity vs credit_score
         lines.append(
-            f"{i}) id={n.get('applicant_id')} score={score_s} "
+            f"{i}) id={n.get('applicant_id')} similarity={sim_s} "
+            f"(vector similarity, NOT credit score) "
             f"loan_paid_back={n.get('loan_paid_back')} summary={summ}"
         )
     return "\n".join(lines) if lines else "(no neighbors found)"
 
 
+
 class RiskAgentNode:
     def __init__(self):
-        self.chain = build_chain(RISK_SYSTEM, RISK_HUMAN, temperature=0.2)
+        self.chain = build_chain(RISK_SYSTEM, RISK_HUMAN, temperature=0.0)
 
     def __call__(self, state: DebateState) -> Dict[str, Any]:
         msgs = state.get("messages", []) or []
@@ -59,7 +64,7 @@ class RiskAgentNode:
 
 class AdvocateAgentNode:
     def __init__(self):
-        self.chain = build_chain(ADV_SYSTEM, ADV_HUMAN, temperature=0.3)
+        self.chain = build_chain(ADV_SYSTEM, ADV_HUMAN, temperature=0.0)
 
     def __call__(self, state: DebateState) -> Dict[str, Any]:
         msgs = state.get("messages", []) or []
@@ -109,6 +114,30 @@ class ModeratorNode:
             return Command(update={"stage": "verdict", "speaker": "judge"}, goto=NODE_JUDGE)
 
         return Command(update={"stage": "verdict", "speaker": "judge"}, goto=NODE_JUDGE)
+    
+
+def _fmt_policy_evidence(matches):
+    
+    if not matches:
+        return "(no relevant policy clauses retrieved)"
+
+    lines = []
+    for i, m in enumerate(matches[:8], 1):
+        pid = m.get("id", "unknown")
+        sim = m.get("similarity")
+
+        try:
+            sim_s = f"{float(sim):.3f}"
+        except Exception:
+            sim_s = "n/a"
+
+        content = (m.get("content") or "").strip().replace("\n", " ")
+        content = content[:320]
+
+        # IMPORTANT: include id + similarity in a stable citation format
+        lines.append(f"{i}) POLICY[id={pid}, sim={sim_s}]: {content}")
+
+    return "\n".join(lines)
 
 
 class JudgeNode:
@@ -118,17 +147,40 @@ class JudgeNode:
     def __call__(self, state: DebateState) -> Dict[str, Any]:
         msgs = state.get("messages", []) or []
 
+        # Build a query from debate + applicant info (no DB storage needed)
+        debate_text = history(msgs)
+        applicant_payload = state.get("applicant_payload", {}) or {}
+        neighbor_stats = state.get("neighbor_stats", {}) or {}
+
+        policy_query = (
+            "Use the following debate + applicant context to find the most relevant bank policy clauses.\n\n"
+            f"APPLICANT:\n{applicant_payload}\n\n"
+            f"NEIGHBOR_STATS:\n{neighbor_stats}\n\n"
+            f"DEBATE:\n{debate_text}\n"
+        )
+
+        # Retrieve policy clauses
+        policy_matches = retrieve_policies(policy_query, k=10)
+        policy_matches = [m for m in policy_matches if (m.get("similarity") or 0) >= 0.60]
+        policy_evidence = _fmt_policy_evidence(policy_matches)
+
+
+        # Judge receives everything
         out = self.chain.invoke({
-            "applicant_payload": state.get("applicant_payload", {}) or {},
-            "neighbor_stats": state.get("neighbor_stats", {}) or {},
+            "applicant_payload": applicant_payload,
+            "neighbor_stats": neighbor_stats,
             "neighbors": _fmt_neighbors(state.get("neighbors", [])),
-            "debate_history": history(msgs),
+            "debate_history": debate_text,
+            "policy_evidence": policy_evidence,
         })
 
         verdict_msg = create_msg("judge", out, "verdict", validated=True)
         return {
             "messages": msgs + [verdict_msg],
-            "judge_verdict": {"raw": out},
+            "judge_verdict": {
+                "raw": out,
+                "policy_matches": policy_matches,   # so you can inspect/debug
+            },
             "stage": "verdict",
             "speaker": "judge",
         }

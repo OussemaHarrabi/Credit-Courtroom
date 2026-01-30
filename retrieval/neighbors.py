@@ -38,12 +38,13 @@ def retrieve_neighbors(
     out = []
     for h in hits:
         payload = getattr(h, "payload", None) or {}
-        score = float(getattr(h, "score", 0.0))
+        raw_score = getattr(h, "score", 0.0)
+        score = float(raw_score) if raw_score is not None else 0.0
         pid = payload.get("applicant_id") or payload.get("id") or str(getattr(h, "id", ""))
 
         out.append({
             "applicant_id": pid,
-            "score": score,
+            "similarity": score,
             "loan_paid_back": int(payload.get("loan_paid_back", -1)) if payload.get("loan_paid_back") is not None else -1,
             "summary": payload.get("summary", ""),
             "raw": payload,

@@ -19,3 +19,8 @@ langchain-groq==0.1.9
 sentence-transformers
 supabase
 python-dotenv
+
+# policy ingestion helpers
+PyPDF2
+chonkie
+python-docx

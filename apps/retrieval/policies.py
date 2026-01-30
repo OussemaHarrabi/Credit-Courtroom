@@ -1,23 +1,17 @@
-import os
 from sentence_transformers import SentenceTransformer
-from supabase import create_client
+from core.supabase_client import supabase
 
-model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+_model = None
 
-supabase = create_client(
-    os.getenv("SUPABASE_URL"), # type: ignore
-    os.getenv("SUPABASE_ANON_KEY"), # type: ignore
-)
+def _get_model():
+    global _model
+    if _model is None:
+        print("initializing model...")
+        _model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+    return _model
 
-def retrieve_policies(decision_text: str, k: int = 5):
-    query_embedding = model.encode(decision_text).tolist()
-
-    result = supabase.rpc(
-        "match_policy_chunks",
-        {
-            "query_embedding": query_embedding,
-            "match_count": k,
-        },
-    ).execute()
-
-    return result.data
+def retrieve_policies(query_text: str, k: int = 5):
+    model = _get_model()
+    query_embedding = model.encode(query_text).tolist()
+    res = supabase.rpc("match_policy_chunks", {"query_embedding": query_embedding, "match_count": k}).execute()
+    return res.data or []
